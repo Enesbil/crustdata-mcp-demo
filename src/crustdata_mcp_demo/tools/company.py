@@ -8,19 +8,33 @@ from crustdata_mcp_demo.client import build_request
 class EnrichCompanyInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    company_domains: List[str] = Field(
-        ...,
-        description="List of company website domains to enrich (e.g. ['hubspot.com', 'google.com'])",
-        min_length=1,
+    company_domains: Optional[List[str]] = Field(
+        default=None,
+        description="List of company website domains (e.g. ['hubspot.com', 'google.com'])",
+        max_length=25,
+    )
+    company_names: Optional[List[str]] = Field(
+        default=None,
+        description="List of company names (e.g. ['Hubspot', 'Google'])",
+        max_length=25,
+    )
+    company_linkedin_urls: Optional[List[str]] = Field(
+        default=None,
+        description="List of company LinkedIn URLs",
+        max_length=25,
+    )
+    company_ids: Optional[List[int]] = Field(
+        default=None,
+        description="List of Crustdata company IDs",
         max_length=25,
     )
     fields: Optional[List[str]] = Field(
         default=None,
-        description="Specific fields to retrieve (e.g. ['company_name', 'headcount.headcount']). If not specified, returns all top-level non-object fields.",
+        description="Specific fields to retrieve (e.g. ['company_name', 'headcount.headcount'])",
     )
     enrich_realtime: bool = Field(
         default=False,
-        description="If True, will enrich companies not in database within 10 minutes",
+        description="If True, index unknown companies within 10 minutes. If False, indexed within 24 hours.",
     )
 
 
@@ -46,7 +60,7 @@ class ScreenCompaniesInput(BaseModel):
         min_length=1,
     )
     offset: int = Field(default=0, ge=0, description="Number of results to skip")
-    count: int = Field(default=100, ge=1, le=1000, description="Number of results to return")
+    count: int = Field(default=100, ge=1, le=100, description="Number of results to return (max 100)")
     sorts: Optional[List[dict]] = Field(default=None, description="Optional sorting criteria")
 
 
@@ -67,7 +81,24 @@ class SearchCompaniesInput(BaseModel):
         description="List of search filters (combined with AND logic)",
         min_length=1,
     )
-    page: int = Field(default=1, ge=1, description="Page number for pagination (25 results per page)")
+    page: int = Field(default=1, ge=1, le=65, description="Page number for pagination (25 results per page, max page 65)")
+
+
+class GetCompanyPeopleInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    company_linkedin_id: Optional[str] = Field(
+        default=None,
+        description="LinkedIn ID of the company",
+    )
+    company_id: Optional[int] = Field(
+        default=None,
+        description="Crustdata company ID",
+    )
+    company_name: Optional[str] = Field(
+        default=None,
+        description="Name of the company",
+    )
 
 
 @mcp.tool(
@@ -82,32 +113,45 @@ class SearchCompaniesInput(BaseModel):
 )
 async def crustdata_enrich_company(params: EnrichCompanyInput) -> str:
     """
-    Enrich company data by domain.
+    Enrich company data by domain, name, LinkedIn URL, or Crustdata ID.
     
     Retrieves detailed information about one or more companies including
     headcount metrics, funding, reviews, web traffic, job openings, news, etc.
     
+    Provide at least one identifier: company_domains, company_names, 
+    company_linkedin_urls, or company_ids.
+    
     Args:
         params: EnrichCompanyInput containing:
             - company_domains: List of domains like ['hubspot.com', 'google.com']
+            - company_names: List of names like ['Hubspot', 'Google']
+            - company_linkedin_urls: List of LinkedIn company URLs
+            - company_ids: List of Crustdata company IDs
             - fields: Optional list of specific fields to retrieve
-            - enrich_realtime: Set True to enrich unknown companies (takes ~10 min)
+            - enrich_realtime: Set True to index unknown companies within 10 min
     
     Returns:
         Dry-run output showing the request that would be sent to Crustdata API.
-    
-    Example domains: 'hubspot.com', 'stripe.com', 'openai.com'
-    Example fields: 'company_name', 'headcount.headcount', 'job_openings', 'news_articles'
     """
-    query_params = {
-        "company_domain": ",".join(params.company_domains),
-    }
+    query_params = {}
+    
+    if params.company_domains:
+        query_params["company_domain"] = ",".join(params.company_domains)
+    
+    if params.company_names:
+        query_params["company_name"] = ",".join(params.company_names)
+    
+    if params.company_linkedin_urls:
+        query_params["company_linkedin_url"] = ",".join(params.company_linkedin_urls)
+    
+    if params.company_ids:
+        query_params["company_id"] = ",".join(str(i) for i in params.company_ids)
     
     if params.fields:
         query_params["fields"] = ",".join(params.fields)
     
     if params.enrich_realtime:
-        query_params["enrich_realtime"] = "True"
+        query_params["enrich_realtime"] = "true"
     
     result = build_request(
         method="GET",
@@ -140,7 +184,7 @@ async def crustdata_screen_companies(params: ScreenCompaniesInput) -> str:
             - op: 'and' or 'or' to combine conditions
             - conditions: List of filter conditions with column, type, value
             - offset: Pagination offset
-            - count: Number of results (max 1000)
+            - count: Number of results (max 100)
             - sorts: Optional sorting
     
     Returns:
@@ -154,14 +198,13 @@ async def crustdata_screen_companies(params: ScreenCompaniesInput) -> str:
     
     Example columns:
         'headcount', 'total_investment_usd', 'largest_headcount_country',
-        'company_website_domain', 'employee_skills_31_to_50_pct'
+        'company_website_domain', 'employee_skills_31_to_50_pct', 'year_founded'
     """
     body = {
         "filters": {
             "op": params.op,
             "conditions": [c.model_dump() for c in params.conditions],
         },
-        "hidden_columns": [],
         "offset": params.offset,
         "count": params.count,
         "sorts": params.sorts or [],
@@ -188,7 +231,7 @@ async def crustdata_screen_companies(params: ScreenCompaniesInput) -> str:
 )
 async def crustdata_search_companies(params: SearchCompaniesInput) -> str:
     """
-    Search for companies using structured filters.
+    Search for companies using structured filters (real-time search).
     
     This uses a different filter format than screening. Filters are combined
     with AND logic. Returns 25 results per page.
@@ -196,7 +239,7 @@ async def crustdata_search_companies(params: SearchCompaniesInput) -> str:
     Args:
         params: SearchCompaniesInput containing:
             - filters: List of filter objects with filter_type, type, value
-            - page: Page number (starts at 1)
+            - page: Page number (1-65)
     
     Returns:
         Dry-run output showing the request that would be sent.
@@ -219,6 +262,54 @@ async def crustdata_search_companies(params: SearchCompaniesInput) -> str:
         method="POST",
         path="/screener/company/search",
         json_body=body,
+    )
+    
+    return result.format_output()
+
+
+@mcp.tool(
+    name="crustdata_get_company_people",
+    annotations={
+        "title": "Get Company People",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+async def crustdata_get_company_people(params: GetCompanyPeopleInput) -> str:
+    """
+    Get people associated with a specific company.
+    
+    Returns employees and decision makers at a company with their
+    LinkedIn profiles, titles, skills, employment history, and education.
+    
+    Provide at least one identifier: company_linkedin_id, company_id, or company_name.
+    
+    Args:
+        params: GetCompanyPeopleInput containing:
+            - company_linkedin_id: LinkedIn ID of the company
+            - company_id: Crustdata company ID
+            - company_name: Name of the company
+    
+    Returns:
+        Dry-run output showing the request that would be sent.
+    """
+    query_params = {}
+    
+    if params.company_linkedin_id:
+        query_params["company_linkedin_id"] = params.company_linkedin_id
+    
+    if params.company_id:
+        query_params["company_id"] = params.company_id
+    
+    if params.company_name:
+        query_params["company_name"] = params.company_name
+    
+    result = build_request(
+        method="GET",
+        path="/screener/company/people",
+        params=query_params,
     )
     
     return result.format_output()

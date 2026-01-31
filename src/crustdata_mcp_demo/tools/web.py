@@ -1,20 +1,8 @@
-from typing import Optional, List, Literal
+from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 
 from crustdata_mcp_demo.server import mcp
 from crustdata_mcp_demo.client import build_request
-
-
-GEOLOCATION_CODES = Literal[
-    "US", "CA", "MX", "BR", "AR", "CL", "CO", "PE", "VE",
-    "GB", "DE", "FR", "IT", "ES", "PT", "NL", "BE", "CH", "AT", "PL", "SE", "NO", "DK", "FI", "IE", "RU", "UA", "CZ", "GR", "TR", "RO", "HU",
-    "JP", "CN", "KR", "IN", "ID", "TH", "VN", "MY", "SG", "PH", "TW", "HK",
-    "SA", "AE", "IL", "EG",
-    "AU", "NZ",
-    "ZA", "NG", "KE",
-]
-
-SEARCH_SOURCES = Literal["news", "web", "scholar-articles", "scholar-articles-enriched", "scholar-author"]
 
 
 class WebSearchInput(BaseModel):
